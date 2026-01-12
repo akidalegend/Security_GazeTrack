@@ -9,6 +9,7 @@ from tkinter import ttk
 from tkinter import font as tkfont
 from PIL import Image, ImageTk
 from ultralytics import YOLO
+from gaze_tracking import GazeTracking
 
 class SecuritySystem:
     def __init__(self, window, window_title):
@@ -28,9 +29,14 @@ class SecuritySystem:
         self.window.configure(bg=self.colors["bg"])
 
         # --- LOGIC SETUP ---
-        print("Initializing AI Model...")
+        print("Initialising Domain Expansion...")
         self.model = YOLO('yolov8n.pt') 
         self.fgbg = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=50, detectShadows=False)
+        
+        # Initialize gaze tracking
+        print("Initialising Sung Jin Woo...")
+        self.gaze = GazeTracking()
+        self.gaze_enabled = False
         
         self.cap = cv2.VideoCapture(0)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
@@ -108,6 +114,12 @@ class SecuritySystem:
         self.use_roi = tk.BooleanVar(value=True)
         tk.Checkbutton(self.sidebar, text="Enable Restricted Zone (ROI)", variable=self.use_roi, 
                        bg=self.colors["panel"], fg="white", selectcolor="#444", activebackground=self.colors["panel"]).pack(pady=10)
+        
+        # Gaze Tracking Toggle
+        self.use_gaze = tk.BooleanVar(value=False)
+        tk.Checkbutton(self.sidebar, text="Enable Gaze Tracking (Diss Spcl)", variable=self.use_gaze, 
+                       bg=self.colors["panel"], fg="white", selectcolor="#444", activebackground=self.colors["panel"], 
+                       command=self.toggle_gaze).pack(pady=5)
 
         # Sensitivity Slider with Value Label
         tk.Label(self.sidebar, text="MOTION THRESHOLD", bg=self.colors["panel"], fg=self.colors["text"], font=("Arial", 10, "bold")).pack(anchor="w", padx=10, pady=(20, 5))
@@ -198,8 +210,16 @@ class SecuritySystem:
                     motion_detected = True
                     break 
             
+            # Process gaze tracking if enabled
+            if self.use_gaze.get():
+                self.gaze.refresh(frame)
+            
             results = self.model(frame, verbose=False)
             annotated_frame = results[0].plot()
+            
+            # Draw gaze tracking overlay if enabled
+            if self.use_gaze.get():
+                annotated_frame = self.draw_gaze_overlay(annotated_frame)
 
             # Draw ROI on screen for UX
             if self.use_roi.get():
@@ -236,6 +256,55 @@ class SecuritySystem:
 
         self.window.after(10, self.update_loop)
 
+    def toggle_gaze(self):
+        """Toggle gaze tracking on/off"""
+        self.gaze_enabled = self.use_gaze.get()
+        if self.gaze_enabled:
+            self.log_message("Eye Tracking ENABLED")
+        else:
+            self.log_message("Eye Tracking DISABLED")
+    
+    def draw_gaze_overlay(self, frame):
+        """Draw gaze tracking visualization on frame"""
+        height, width = frame.shape[:2]
+        
+        # Draw pupil coordinates
+        left_pupil = self.gaze.pupil_left_coords()
+        right_pupil = self.gaze.pupil_right_coords()
+        
+        if left_pupil:
+            cv2.circle(frame, left_pupil, 3, (0, 255, 0), -1)
+            cv2.circle(frame, left_pupil, 8, (0, 255, 0), 2)
+        
+        if right_pupil:
+            cv2.circle(frame, right_pupil, 3, (0, 255, 0), -1)
+            cv2.circle(frame, right_pupil, 8, (0, 255, 0), 2)
+        
+        # Display gaze direction text
+        text = ""
+        if self.gaze.is_blinking():
+            text = "BLINKING"
+            color = (255, 255, 0)
+        elif self.gaze.is_right():
+            text = "Looking RIGHT"
+            color = (0, 255, 255)
+        elif self.gaze.is_left():
+            text = "Looking LEFT"
+            color = (0, 255, 255)
+        elif self.gaze.is_center():
+            text = "Looking CENTER"
+            color = (0, 255, 0)
+        
+        if text:
+            cv2.putText(frame, text, (10, height - 20), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+        
+        # Draw eye tracking indicator
+        cv2.putText(frame, "EYE TRACKING ON", (10, 70), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        
+        return frame
+    
     def quit_app(self):
         if self.is_recording:
             self.stop_recording()
