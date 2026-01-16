@@ -47,6 +47,7 @@ class SecuritySystem:
         # Variables
         self.use_roi = tk.BooleanVar(value=True)
         self.use_gaze = tk.BooleanVar(value=False)
+        self.use_low_light = tk.BooleanVar(value=True)  # NEW: Low light enhancement toggle
 
         # --- UI LAYOUT ---
         self.header = tk.Frame(self.window, bg=self.colors["card"], height=70)
@@ -84,6 +85,11 @@ class SecuritySystem:
         tk.Checkbutton(self.control_panel, text="Biometric Gaze Tracking", variable=self.use_gaze, 
                        bg=self.colors["card"], fg=self.colors["text"], selectcolor=self.colors["bg"],
                        activebackground=self.colors["card"], font=("Arial", 11), command=self.toggle_gaze).pack(anchor="w", pady=(10, 0))
+
+        # NEW: Low light enhancement toggle
+        tk.Checkbutton(self.control_panel, text="Low Light Enhancement", variable=self.use_low_light, 
+                       bg=self.colors["card"], fg=self.colors["text"], selectcolor=self.colors["bg"],
+                       activebackground=self.colors["card"], font=("Arial", 11), command=self.toggle_low_light).pack(anchor="w", pady=(10, 0))
 
         tk.Label(self.control_panel, text="MOTION SENSITIVITY", bg=self.colors["card"], 
                  fg=self.colors["dim"], font=("Arial", 8, "bold")).pack(anchor="w", pady=(20, 5))
@@ -147,10 +153,22 @@ class SecuritySystem:
             self.log_message("STATUS: Recording saved")
             self.refresh_recordings()
 
+    def enhance_low_light(self, frame):
+        """Apply low light enhancement using histogram equalization"""
+        img_yuv = cv2.cvtColor(frame, cv2.COLOR_BGR2YUV)
+        img_yuv[:,:,0] = cv2.equalizeHist(img_yuv[:,:,0])  # Equalize Y (luminance) channel
+        enhanced_frame = cv2.cvtColor(img_yuv, cv2.COLOR_YUV2BGR)
+        return enhanced_frame
+
     def update_loop(self):
         ret, frame = self.cap.read()
         if ret:
             self.latest_frame = frame
+            
+            # Apply low light enhancement if enabled
+            if self.use_low_light.get():
+                frame = self.enhance_low_light(frame)
+            
             mask = self.fgbg.apply(frame)
             _, mask = cv2.threshold(mask, 254, 255, cv2.THRESH_BINARY)
             
@@ -200,6 +218,10 @@ class SecuritySystem:
     def toggle_gaze(self):
         state = "ENABLED" if self.use_gaze.get() else "DISABLED"
         self.log_message(f"SYSTEM: Gaze tracking {state}")
+
+    def toggle_low_light(self):
+        state = "ENABLED" if self.use_low_light.get() else "DISABLED"
+        self.log_message(f"SYSTEM: Low light enhancement {state}")
 
     def draw_gaze_overlay(self, frame):
         h, w = frame.shape[:2]
