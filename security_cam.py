@@ -6,7 +6,6 @@ import os
 import subprocess
 import tkinter as tk
 from tkinter import ttk
-from tkinter import font as tkfont
 from PIL import Image, ImageTk
 from ultralytics import YOLO
 from gaze_tracking import GazeTracking
@@ -15,139 +14,113 @@ class SecuritySystem:
     def __init__(self, window, window_title):
         self.window = window
         self.window.title(window_title)
-        self.window.geometry("1000x600")
+        self.window.geometry("1200x800")
         
-        # --- DESIGN: Dark Mode Theme Colors ---
+        # --- MODERN COLOR PALETTE ---
         self.colors = {
-            "bg": "#1e1e1e",       # Dark Grey Background
-            "panel": "#252526",    # Slightly lighter panel
-            "text": "#d4d4d4",     # Off-white text
-            "accent": "#007acc",   # VS Code Blue
-            "alert": "#d63031",    # Red for recording
-            "success": "#00b894"   # Green for system ready
+            "bg": "#0F172A",       # Deep Navy
+            "card": "#1E293B",     # Slate
+            "text": "#F8FAFC",     # Ghost White
+            "dim": "#94A3B8",      # Muted Blue/Grey
+            "accent": "#0EA5E9",   # Cyan
+            "alert": "#F43F5E",    # Rose/Red
+            "success": "#10B981"   # Emerald/Green
         }
         self.window.configure(bg=self.colors["bg"])
 
-        # --- LOGIC SETUP ---
-        print("Initialising Domain Expansion...")
+        # --- LOGIC INITIALIZATION ---
+        print("Initialising AI Core...")
         self.model = YOLO('yolov8n.pt') 
         self.fgbg = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=50, detectShadows=False)
-        
-        # Initialize gaze tracking
-        print("Initialising Sung Jin Woo...")
         self.gaze = GazeTracking()
-        self.gaze_enabled = False
         
         self.cap = cv2.VideoCapture(0)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         
-        if not self.cap.isOpened():
-            sys.exit()
-
         self.is_recording = False
         self.out = None
         self.no_motion_frames = 0
         self.recording_cooldown = 30
-        self.latest_frame = None # Initialize to None
+        self.latest_frame = None
 
-        # --- GUI LAYOUT: Grid System ---
-        # 1. Header Section
-        self.header = tk.Frame(window, bg=self.colors["panel"], height=50)
+        # Variables
+        self.use_roi = tk.BooleanVar(value=True)
+        self.use_gaze = tk.BooleanVar(value=False)
+
+        # --- UI LAYOUT ---
+        self.header = tk.Frame(self.window, bg=self.colors["card"], height=70)
         self.header.pack(fill=tk.X, side=tk.TOP)
-        
-        self.title_label = tk.Label(self.header, text="NORTHAMPTON WAREHOUSE SENTINEL", 
-                                    font=("Helvetica", 16, "bold"), 
-                                    bg=self.colors["panel"], fg=self.colors["accent"])
-        self.title_label.pack(pady=10)
+        self.header.pack_propagate(False)
 
-        # 2. Main Content Area (Holds Video + Sidebar)
-        self.main_content = tk.Frame(window, bg=self.colors["bg"])
-        self.main_content.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
-
-        # 3. Video Canvas (Left Side)
-        # Added a border to make it look like a monitor
-        self.video_frame = tk.Frame(self.main_content, bg="black", bd=2, relief="sunken")
-        self.video_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tk.Label(self.header, text="SENTINEL AI", font=("Futura", 24, "bold"), 
+                 bg=self.colors["card"], fg=self.colors["accent"]).pack(side=tk.LEFT, padx=30)
         
-        self.canvas = tk.Canvas(self.video_frame, bg="black", width=640, height=360)
+        self.status_indicator = tk.Label(self.header, text="● SYSTEM ONLINE", font=("Helvetica", 12, "bold"), 
+                                        bg=self.colors["card"], fg=self.colors["success"])
+        self.status_indicator.pack(side=tk.RIGHT, padx=30)
+
+        self.workspace = tk.Frame(self.window, bg=self.colors["bg"], pady=20, padx=20)
+        self.workspace.pack(fill=tk.BOTH, expand=True)
+
+        self.video_card = tk.Frame(self.workspace, bg="black", bd=0)
+        self.video_card.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.canvas = tk.Canvas(self.video_card, bg="black", highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
-        # 4. Sidebar Controls (Right Side)
-        self.sidebar = tk.Frame(self.main_content, bg=self.colors["panel"], width=300)
+        self.sidebar = tk.Frame(self.workspace, bg=self.colors["bg"], width=350)
         self.sidebar.pack(side=tk.RIGHT, fill=tk.Y, padx=(20, 0))
-        self.sidebar.pack_propagate(False) # Force width
+        self.sidebar.pack_propagate(False)
 
-        # Status Indicator
-        self.status_lbl = tk.Label(self.sidebar, text="● SYSTEM ACTIVE", fg=self.colors["success"], bg=self.colors["panel"], font=("Arial", 10, "bold"))
-        self.status_lbl.pack(pady=(20, 10))
+        self.control_panel = tk.LabelFrame(self.sidebar, text=" CONFIGURATION ", bg=self.colors["card"], 
+                                          fg=self.colors["dim"], font=("Arial", 10, "bold"), padx=15, pady=15)
+        self.control_panel.pack(fill=tk.X, pady=(0, 20))
 
-        # --- TABS: Log & Recordings ---
-        self.tabs = ttk.Notebook(self.sidebar)
-        self.tabs.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
-
-        # Tab 1: Log
-        self.tab_log = tk.Frame(self.tabs, bg=self.colors["panel"])
-        self.tabs.add(self.tab_log, text="System Log")
+        tk.Checkbutton(self.control_panel, text="Enable Perimeter Detection", variable=self.use_roi, 
+                       bg=self.colors["card"], fg=self.colors["text"], selectcolor=self.colors["bg"],
+                       activebackground=self.colors["card"], font=("Arial", 11)).pack(anchor="w")
         
-        self.log_text = tk.Text(self.tab_log, height=15, bg="black", fg="#00ff00", font=("Courier New", 10), bd=0)
+        tk.Checkbutton(self.control_panel, text="Biometric Gaze Tracking", variable=self.use_gaze, 
+                       bg=self.colors["card"], fg=self.colors["text"], selectcolor=self.colors["bg"],
+                       activebackground=self.colors["card"], font=("Arial", 11), command=self.toggle_gaze).pack(anchor="w", pady=(10, 0))
+
+        tk.Label(self.control_panel, text="MOTION SENSITIVITY", bg=self.colors["card"], 
+                 fg=self.colors["dim"], font=("Arial", 8, "bold")).pack(anchor="w", pady=(20, 5))
+        
+        self.style = ttk.Style()
+        self.style.theme_use('clam')
+        self.style.configure("TScale", background=self.colors["card"])
+        
+        self.sensitivity = ttk.Scale(self.control_panel, from_=500, to=5000, orient=tk.HORIZONTAL)
+        self.sensitivity.set(1000)
+        self.sensitivity.pack(fill=tk.X)
+
+        self.tabs = ttk.Notebook(self.sidebar)
+        self.tabs.pack(fill=tk.BOTH, expand=True)
+
+        self.tab_log = tk.Frame(self.tabs, bg=self.colors["card"])
+        self.tabs.add(self.tab_log, text=" ACTIVITY ")
+        self.log_text = tk.Text(self.tab_log, bg="#000", fg=self.colors["success"], 
+                                font=("Courier", 10), bd=0, padx=10, pady=10)
         self.log_text.pack(fill=tk.BOTH, expand=True)
 
-        # Tab 2: Recordings
-        self.tab_rec = tk.Frame(self.tabs, bg=self.colors["panel"])
-        self.tabs.add(self.tab_rec, text="Recordings")
-
-        self.rec_list = tk.Listbox(self.tab_rec, bg="black", fg="white", bd=0, selectbackground=self.colors["accent"])
-        self.rec_list.pack(fill=tk.BOTH, expand=True, pady=5)
+        self.tab_rec = tk.Frame(self.tabs, bg=self.colors["card"])
+        self.tabs.add(self.tab_rec, text=" ARCHIVE ")
+        self.rec_list = tk.Listbox(self.tab_rec, bg="#000", fg="white", bd=0, 
+                                   selectbackground=self.colors["accent"], font=("Arial", 10))
+        self.rec_list.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        btn_play = tk.Button(self.tab_rec, text="▶ PLAY SELECTED", command=self.play_recording, 
-                             bg=self.colors["accent"], fg="white", font=("Arial", 9, "bold"))
-        btn_play.pack(fill=tk.X)
-        
-        btn_refresh = tk.Button(self.tab_rec, text="⟳ REFRESH", command=self.refresh_recordings, 
-                                bg="#444", fg="white", font=("Arial", 9))
-        btn_refresh.pack(fill=tk.X)
+        tk.Button(self.tab_rec, text="▶ VIEW FOOTAGE", command=self.play_recording, 
+                  bg=self.colors["accent"], fg="white", relief="flat", font=("Arial", 10, "bold")).pack(fill=tk.X, padx=5, pady=5)
 
-        self.refresh_recordings() # Initial load
+        self.btn_quit = tk.Button(self.sidebar, text="TERMINATE SYSTEM", command=self.quit_app, 
+                                  bg=self.colors["alert"], fg="white", relief="flat", 
+                                  font=("Arial", 11, "bold"), pady=12)
+        self.btn_quit.pack(side=tk.BOTTOM, fill=tk.X)
 
-        # ROI Toggle
-        self.use_roi = tk.BooleanVar(value=True)
-        tk.Checkbutton(self.sidebar, text="Enable Restricted Zone (ROI)", variable=self.use_roi, 
-                       bg=self.colors["panel"], fg="white", selectcolor="#444", activebackground=self.colors["panel"]).pack(pady=10)
-        
-        # Gaze Tracking Toggle
-        self.use_gaze = tk.BooleanVar(value=False)
-        tk.Checkbutton(self.sidebar, text="Enable Gaze Tracking (Diss Spcl)", variable=self.use_gaze, 
-                       bg=self.colors["panel"], fg="white", selectcolor="#444", activebackground=self.colors["panel"], 
-                       command=self.toggle_gaze).pack(pady=5)
-
-        # Sensitivity Slider with Value Label
-        tk.Label(self.sidebar, text="MOTION THRESHOLD", bg=self.colors["panel"], fg=self.colors["text"], font=("Arial", 10, "bold")).pack(anchor="w", padx=10, pady=(20, 5))
-        
-        # Value readout
-        self.sens_value_lbl = tk.Label(self.sidebar, text="1000", bg=self.colors["panel"], fg=self.colors["accent"])
-        self.sens_value_lbl.pack()
-
-        self.sensitivity = ttk.Scale(self.sidebar, from_=500, to=5000, orient=tk.HORIZONTAL, command=self.update_sens_label)
-        self.sensitivity.set(1000)
-        self.sensitivity.pack(fill=tk.X, padx=10)
-
-        # Buttons (Using ttk for Mac compatibility)
-        style = ttk.Style()
-        style.theme_use('clam') # Helps with styling on some OS
-        
-        self.btn_frame = tk.Frame(self.sidebar, bg=self.colors["panel"])
-        self.btn_frame.pack(side=tk.BOTTOM, pady=20, fill=tk.X)
-        
-        self.btn_quit = tk.Button(self.btn_frame, text="SHUT DOWN SYSTEM", command=self.quit_app, 
-                                  bg=self.colors["alert"], fg="white", font=("Arial", 11, "bold"),
-                                  activebackground="#b71c1c", relief="flat", pady=10)
-        self.btn_quit.pack(fill=tk.X, padx=10)
-
+        self.refresh_recordings()
         self.update_loop()
-
-    def update_sens_label(self, val):
-        self.sens_value_lbl.config(text=f"{int(float(val))}")
 
     def log_message(self, message):
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
@@ -160,71 +133,44 @@ class SecuritySystem:
         if not os.path.exists("recordings"):
             os.makedirs("recordings")
         filename = f"recordings/incident_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.avi"
-        fourcc = cv2.VideoWriter_fourcc(*'MJPG') # MJPG is safer for Mac QuickTime than XVID
+        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
         self.out = cv2.VideoWriter(filename, fourcc, 20.0, (frame_width, frame_height))
         self.is_recording = True
-        self.status_lbl.config(text="● RECORDING IN PROGRESS", fg=self.colors["alert"]) # Update Status
-        self.log_message(f"REC STARTED")
-        
-        # Save the passed frame (which will be annotated)
-        img_filename = filename.replace(".avi", ".jpg")
-        cv2.imwrite(img_filename, frame) # Save the frame
-        self.log_message(f"SNAPSHOT SAVED") # Save snapshot when recording starts for a mugshot (Smart addition)
+        self.status_indicator.config(text="● RECORDING", fg=self.colors["alert"])
+        self.log_message(f"TRIGGER: Recording started")
 
     def stop_recording(self):
         if self.is_recording:
             self.out.release()
             self.is_recording = False
-            self.status_lbl.config(text="● SYSTEM ACTIVE", fg=self.colors["success"]) # Reset Status
-            self.log_message("REC STOPPED: Saved")
+            self.status_indicator.config(text="● SYSTEM ONLINE", fg=self.colors["success"])
+            self.log_message("STATUS: Recording saved")
+            self.refresh_recordings()
 
     def update_loop(self):
         ret, frame = self.cap.read()
         if ret:
-            self.latest_frame = frame # Store the frame for snapshots
-            
-            # Logic remains mostly same, just better integration
+            self.latest_frame = frame
             mask = self.fgbg.apply(frame)
             _, mask = cv2.threshold(mask, 254, 255, cv2.THRESH_BINARY)
-
-            height, width = mask.shape
             
-            # --- FEATURE A: Define ROI (Region of Interest) ---
-            # We define a box in the center/bottom where we CARE about motion
-            roi_x1, roi_y1 = int(width * 0.1), int(height * 0.3) 
-            roi_x2, roi_y2 = int(width * 0.9), int(height * 0.9)
-            
-            # Black out everything OUTSIDE the ROI if enabled
             if self.use_roi.get():
+                h, w = mask.shape
                 roi_mask = np.zeros_like(mask)
-                roi_mask[roi_y1:roi_y2, roi_x1:roi_x2] = 255 # White rectangle in ROI
-                mask = cv2.bitwise_and(mask, roi_mask) # Only keep motion inside ROI
+                roi_mask[int(h*0.3):int(h*0.9), int(w*0.1):int(w*0.9)] = 255
+                mask = cv2.bitwise_and(mask, roi_mask)
 
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            motion_detected = False
-            min_area = self.sensitivity.get()
+            motion_detected = any(cv2.contourArea(c) > self.sensitivity.get() for c in contours)
 
-            for cnt in contours:
-                if cv2.contourArea(cnt) > min_area:
-                    motion_detected = True
-                    break 
-            
-            # Process gaze tracking if enabled
             if self.use_gaze.get():
                 self.gaze.refresh(frame)
             
             results = self.model(frame, verbose=False)
             annotated_frame = results[0].plot()
             
-            # Draw gaze tracking overlay if enabled
             if self.use_gaze.get():
                 annotated_frame = self.draw_gaze_overlay(annotated_frame)
-
-            # Draw ROI on screen for UX
-            if self.use_roi.get():
-                cv2.rectangle(annotated_frame, (roi_x1, roi_y1), (roi_x2, roi_y2), (0, 255, 255), 2)
-                cv2.putText(annotated_frame, "RESTRICTED ZONE", (roi_x1, roi_y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
             if motion_detected:
                 self.no_motion_frames = 0
@@ -238,99 +184,48 @@ class SecuritySystem:
 
             if self.is_recording:
                 cv2.circle(annotated_frame, (30, 30), 10, (0, 0, 255), -1)
-                cv2.putText(annotated_frame, "REC", (50, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                 self.out.write(annotated_frame)
 
-            # Resize logic to fit the new canvas size dynamically
-            canvas_w = self.canvas.winfo_width()
-            canvas_h = self.canvas.winfo_height()
-            
-            if canvas_w > 1 and canvas_h > 1: # Prevent error on startup
-                annotated_frame = cv2.resize(annotated_frame, (canvas_w, canvas_h))
+            cv_w, cv_h = self.canvas.winfo_width(), self.canvas.winfo_height()
+            if cv_w > 1:
+                annotated_frame = cv2.resize(annotated_frame, (cv_w, cv_h))
 
             img = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(img)
-            imgtk = ImageTk.PhotoImage(image=img)
-            self.canvas.create_image(0, 0, anchor=tk.NW, image=imgtk)
-            self.canvas.image = imgtk
+            img = ImageTk.PhotoImage(Image.fromarray(img))
+            self.canvas.create_image(0, 0, anchor=tk.NW, image=img)
+            self.canvas.image = img
 
         self.window.after(10, self.update_loop)
 
     def toggle_gaze(self):
-        """Toggle gaze tracking on/off"""
-        self.gaze_enabled = self.use_gaze.get()
-        if self.gaze_enabled:
-            self.log_message("Eye Tracking ENABLED")
-        else:
-            self.log_message("Eye Tracking DISABLED")
-    
+        state = "ENABLED" if self.use_gaze.get() else "DISABLED"
+        self.log_message(f"SYSTEM: Gaze tracking {state}")
+
     def draw_gaze_overlay(self, frame):
-        """Draw gaze tracking visualization on frame"""
-        height, width = frame.shape[:2]
-        
-        # Draw pupil coordinates
-        left_pupil = self.gaze.pupil_left_coords()
-        right_pupil = self.gaze.pupil_right_coords()
-        
-        if left_pupil:
-            cv2.circle(frame, left_pupil, 3, (0, 255, 0), -1)
-            cv2.circle(frame, left_pupil, 8, (0, 255, 0), 2)
-        
-        if right_pupil:
-            cv2.circle(frame, right_pupil, 3, (0, 255, 0), -1)
-            cv2.circle(frame, right_pupil, 8, (0, 255, 0), 2)
-        
-        # Display gaze direction text
-        text = ""
-        if self.gaze.is_blinking():
-            text = "BLINKING"
-            color = (255, 255, 0)
-        elif self.gaze.is_right():
-            text = "Looking RIGHT"
-            color = (0, 255, 255)
-        elif self.gaze.is_left():
-            text = "Looking LEFT"
-            color = (0, 255, 255)
-        elif self.gaze.is_center():
-            text = "Looking CENTER"
-            color = (0, 255, 0)
-        
-        if text:
-            cv2.putText(frame, text, (10, height - 20), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-        
-        # Draw eye tracking indicator
-        cv2.putText(frame, "EYE TRACKING ON", (10, 70), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-        
+        h, w = frame.shape[:2]
+        l, r = self.gaze.pupil_left_coords(), self.gaze.pupil_right_coords()
+        for p in [l, r]:
+            if p: cv2.circle(frame, p, 5, (0, 255, 0), -1)
         return frame
-    
-    def quit_app(self):
-        if self.is_recording:
-            self.stop_recording()
-        self.cap.release()
-        self.window.destroy()
 
     def refresh_recordings(self):
         self.rec_list.delete(0, tk.END)
         if os.path.exists("recordings"):
-            files = sorted([f for f in os.listdir("recordings") if f.endswith(".avi")], reverse=True)
-            for f in files:
+            for f in sorted([f for f in os.listdir("recordings") if f.endswith(".avi")], reverse=True):
                 self.rec_list.insert(tk.END, f)
 
     def play_recording(self):
         selection = self.rec_list.curselection()
         if selection:
-            filename = self.rec_list.get(selection[0])
-            filepath = os.path.abspath(os.path.join("recordings", filename))
-            if sys.platform == "darwin":
-                subprocess.call(('open', filepath))
-            elif sys.platform == "win32":
-                os.startfile(filepath)
-            else:
-                subprocess.call(('xdg-open', filepath))
+            path = os.path.abspath(os.path.join("recordings", self.rec_list.get(selection[0])))
+            subprocess.call(('open', path))
+
+    def quit_app(self):
+        self.stop_recording()
+        self.cap.release()
+        self.window.destroy()
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = SecuritySystem(root, "Northampton Warehouse Security System v1.0")
+    app = SecuritySystem(root, "SENTINEL AI v2.0")
     root.mainloop()
