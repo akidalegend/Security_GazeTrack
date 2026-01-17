@@ -47,14 +47,31 @@ class SecuritySystem:
         # Variables
         self.use_roi = tk.BooleanVar(value=True)
         self.use_gaze = tk.BooleanVar(value=False)
-        self.use_low_light = tk.BooleanVar(value=True)  # NEW: Low light enhancement toggle
+        self.use_low_light = tk.BooleanVar(value=True)
+        self.use_distortion_correction = tk.BooleanVar(value=True)
+        self.use_auto_roi = tk.BooleanVar(value=False)  # NEW: Auto ROI detection
+        
+        # Auto ROI variables
+        self.roi_coords = None
+        self.roi_learning_frames = 0
+        self.roi_max_learning = 100  # Learn ROI over first 100 frames
+
+        # Camera calibration parameters (simulated for typical webcam)
+        self.camera_matrix = np.array([
+            [1280, 0, 640],      # fx, 0, cx
+            [0, 1280, 360],      # 0, fy, cy  
+            [0, 0, 1]            # 0, 0, 1
+        ], dtype=np.float32)
+        
+        # Distortion coefficients: k1, k2, p1, p2, k3
+        self.distortion_coeffs = np.array([-0.2, 0.1, 0.001, 0.001, -0.05], dtype=np.float32)
 
         # --- UI LAYOUT ---
         self.header = tk.Frame(self.window, bg=self.colors["card"], height=70)
         self.header.pack(fill=tk.X, side=tk.TOP)
         self.header.pack_propagate(False)
 
-        tk.Label(self.header, text="SENTINEL AI", font=("Futura", 24, "bold"), 
+        tk.Label(self.header, text="SATORU GOJO SIX EYES SYSTEM", font=("Futura", 24, "bold"), 
                  bg=self.colors["card"], fg=self.colors["accent"]).pack(side=tk.LEFT, padx=30)
         
         self.status_indicator = tk.Label(self.header, text="● SYSTEM ONLINE", font=("Helvetica", 12, "bold"), 
@@ -86,10 +103,19 @@ class SecuritySystem:
                        bg=self.colors["card"], fg=self.colors["text"], selectcolor=self.colors["bg"],
                        activebackground=self.colors["card"], font=("Arial", 11), command=self.toggle_gaze).pack(anchor="w", pady=(10, 0))
 
-        # NEW: Low light enhancement toggle
         tk.Checkbutton(self.control_panel, text="Low Light Enhancement", variable=self.use_low_light, 
                        bg=self.colors["card"], fg=self.colors["text"], selectcolor=self.colors["bg"],
                        activebackground=self.colors["card"], font=("Arial", 11), command=self.toggle_low_light).pack(anchor="w", pady=(10, 0))
+
+        # NEW: Distortion correction toggle
+        tk.Checkbutton(self.control_panel, text="Lens Distortion Correction", variable=self.use_distortion_correction, 
+                       bg=self.colors["card"], fg=self.colors["text"], selectcolor=self.colors["bg"],
+                       activebackground=self.colors["card"], font=("Arial", 11), command=self.toggle_distortion_correction).pack(anchor="w", pady=(10, 0))
+
+        # Add Auto ROI checkbox
+        tk.Checkbutton(self.control_panel, text="Automatic ROI Detection", variable=self.use_auto_roi, 
+                       bg=self.colors["card"], fg=self.colors["text"], selectcolor=self.colors["bg"],
+                       activebackground=self.colors["card"], font=("Arial", 11), command=self.toggle_auto_roi).pack(anchor="w", pady=(10, 0))
 
         tk.Label(self.control_panel, text="MOTION SENSITIVITY", bg=self.colors["card"], 
                  fg=self.colors["dim"], font=("Arial", 8, "bold")).pack(anchor="w", pady=(20, 5))
@@ -118,11 +144,15 @@ class SecuritySystem:
         self.rec_list.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         tk.Button(self.tab_rec, text="▶ VIEW FOOTAGE", command=self.play_recording, 
-                  bg=self.colors["accent"], fg="white", relief="flat", font=("Arial", 10, "bold")).pack(fill=tk.X, padx=5, pady=5)
+                  bg="#1E293B", fg="#F8FAFC", relief="flat", font=("Arial", 10, "bold"),
+                  activebackground="#334155", activeforeground="#F8FAFC", 
+                  borderwidth=0, highlightthickness=0).pack(fill=tk.X, padx=5, pady=5)
 
         self.btn_quit = tk.Button(self.sidebar, text="TERMINATE SYSTEM", command=self.quit_app, 
-                                  bg=self.colors["alert"], fg="white", relief="flat", 
-                                  font=("Arial", 11, "bold"), pady=12)
+                                  bg="#1E293B", fg="#F8FAFC", relief="flat", 
+                                  font=("Arial", 11, "bold"), pady=12,
+                                  activebackground="#334155", activeforeground="#F8FAFC",
+                                  borderwidth=0, highlightthickness=0)
         self.btn_quit.pack(side=tk.BOTTOM, fill=tk.X)
 
         self.refresh_recordings()
@@ -153,30 +183,149 @@ class SecuritySystem:
             self.log_message("STATUS: Recording saved")
             self.refresh_recordings()
 
+    def correct_distortion(self, frame):
+        """Apply camera distortion correction using calibration parameters"""
+        return cv2.undistort(frame, self.camera_matrix, self.distortion_coeffs)
+
     def enhance_low_light(self, frame):
         """Apply low light enhancement using histogram equalization"""
         img_yuv = cv2.cvtColor(frame, cv2.COLOR_BGR2YUV)
-        img_yuv[:,:,0] = cv2.equalizeHist(img_yuv[:,:,0])  # Equalize Y (luminance) channel
+        img_yuv[:,:,0] = cv2.equalizeHist(img_yuv[:,:,0])
         enhanced_frame = cv2.cvtColor(img_yuv, cv2.COLOR_YUV2BGR)
         return enhanced_frame
+
+    def detect_auto_roi(self, frame):
+        """Automatically detect ROI based on scene analysis"""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        # Method 1: Edge-based ROI (detect doorways, windows, etc.)
+        edges = cv2.Canny(gray, 50, 150)
+        
+        # Find contours of significant structures
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Filter contours by size and aspect ratio
+        significant_contours = []
+        h, w = frame.shape[:2]
+        min_area = (w * h) * 0.02  # At least 2% of frame
+        
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area > min_area:
+                x, y, cw, ch = cv2.boundingRect(contour)
+                # Check if it's a reasonable shape for a doorway/window
+                aspect_ratio = ch / cw
+                if 0.5 < aspect_ratio < 3.0:  # Not too wide or too tall
+                    significant_contours.append((x, y, x+cw, y+ch))
+        
+        if significant_contours:
+            # Find the most central significant structure
+            center_x, center_y = w//2, h//2
+            closest_dist = float('inf')
+            best_roi = None
+            
+            for x1, y1, x2, y2 in significant_contours:
+                roi_center_x = (x1 + x2) // 2
+                roi_center_y = (y1 + y2) // 2
+                dist = np.sqrt((roi_center_x - center_x)**2 + (roi_center_y - center_y)**2)
+                
+                if dist < closest_dist:
+                    closest_dist = dist
+                    best_roi = (x1, y1, x2, y2)
+            
+            return best_roi
+        
+        # Method 2: Motion-based ROI learning
+        return self.learn_roi_from_motion(frame)
+
+    def learn_roi_from_motion(self, frame):
+        """Learn ROI from accumulated motion patterns"""
+        if self.roi_learning_frames < self.roi_max_learning:
+            # Apply background subtraction
+            mask = self.fgbg.apply(frame)
+            _, mask = cv2.threshold(mask, 254, 255, cv2.THRESH_BINARY)
+            
+            # Find motion areas
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if contours:
+                # Get bounding box of all motion
+                all_points = np.vstack([contour for contour in contours])
+                x, y, w, h = cv2.boundingRect(all_points)
+                
+                # Expand ROI slightly for better coverage
+                padding = 50
+                h_frame, w_frame = frame.shape[:2]
+                
+                roi_x1 = max(0, x - padding)
+                roi_y1 = max(0, y - padding)
+                roi_x2 = min(w_frame, x + w + padding)
+                roi_y2 = min(h_frame, y + h + padding)
+                
+                if self.roi_coords is None:
+                    self.roi_coords = [roi_x1, roi_y1, roi_x2, roi_y2]
+                else:
+                    # Gradually expand ROI to encompass all detected motion
+                    self.roi_coords[0] = min(self.roi_coords[0], roi_x1)
+                    self.roi_coords[1] = min(self.roi_coords[1], roi_y1)
+                    self.roi_coords[2] = max(self.roi_coords[2], roi_x2)
+                    self.roi_coords[3] = max(self.roi_coords[3], roi_y2)
+            
+            self.roi_learning_frames += 1
+            
+            if self.roi_learning_frames == self.roi_max_learning:
+                self.log_message("AUTO-ROI: Learning complete")
+        
+        return tuple(self.roi_coords) if self.roi_coords else None
 
     def update_loop(self):
         ret, frame = self.cap.read()
         if ret:
             self.latest_frame = frame
             
+            # Apply distortion correction if enabled
+            if self.use_distortion_correction.get():
+                frame = self.correct_distortion(frame)
+            
             # Apply low light enhancement if enabled
             if self.use_low_light.get():
                 frame = self.enhance_low_light(frame)
             
-            mask = self.fgbg.apply(frame)
-            _, mask = cv2.threshold(mask, 254, 255, cv2.THRESH_BINARY)
+            # Initialize auto_roi variable
+            auto_roi = None
+            
+            # CREATE ROI MASK FIRST (before background subtraction)
+            roi_frame = frame.copy()  # Work with a copy for ROI processing
+            yolo_frame = frame.copy()  # Separate frame for YOLO processing
             
             if self.use_roi.get():
-                h, w = mask.shape
-                roi_mask = np.zeros_like(mask)
-                roi_mask[int(h*0.3):int(h*0.9), int(w*0.1):int(w*0.9)] = 255
-                mask = cv2.bitwise_and(mask, roi_mask)
+                if self.use_auto_roi.get():
+                    # Auto-detect ROI
+                    auto_roi = self.detect_auto_roi(frame)
+                    if auto_roi:
+                        roi_x1, roi_y1, roi_x2, roi_y2 = auto_roi
+                    else:
+                        # Fallback to default ROI
+                        h, w = frame.shape[:2]
+                        roi_x1, roi_y1 = int(w*0.1), int(h*0.3)
+                        roi_x2, roi_y2 = int(w*0.9), int(h*0.9)
+                else:
+                    # Manual ROI (existing behavior)
+                    h, w = frame.shape[:2]
+                    roi_x1, roi_y1 = int(w*0.1), int(h*0.3)
+                    roi_x2, roi_y2 = int(w*0.9), int(h*0.9)
+                
+                # Apply ROI mask to BOTH motion detection AND YOLO frames
+                roi_frame = np.zeros_like(frame)
+                roi_frame[roi_y1:roi_y2, roi_x1:roi_x2] = frame[roi_y1:roi_y2, roi_x1:roi_x2]
+                
+                # Mask YOLO frame as well
+                yolo_frame = np.zeros_like(frame)
+                yolo_frame[roi_y1:roi_y2, roi_x1:roi_x2] = frame[roi_y1:roi_y2, roi_x1:roi_x2]
+            
+            # Apply background subtraction to the ROI-masked frame
+            mask = self.fgbg.apply(roi_frame)
+            _, mask = cv2.threshold(mask, 254, 255, cv2.THRESH_BINARY)
 
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             motion_detected = any(cv2.contourArea(c) > self.sensitivity.get() for c in contours)
@@ -184,8 +333,25 @@ class SecuritySystem:
             if self.use_gaze.get():
                 self.gaze.refresh(frame)
             
-            results = self.model(frame, verbose=False)
+            # Run YOLO on the ROI-masked frame (or original if ROI disabled)
+            results = self.model(yolo_frame, verbose=False)
             annotated_frame = results[0].plot()
+            
+            # Draw Auto ROI if enabled (fixed condition)
+            if self.use_roi.get() and self.use_auto_roi.get() and auto_roi is not None:
+                roi_x1, roi_y1, roi_x2, roi_y2 = auto_roi
+                cv2.rectangle(annotated_frame, (roi_x1, roi_y1), (roi_x2, roi_y2), (255, 165, 0), 2)
+                cv2.putText(annotated_frame, "AUTO-ROI", (roi_x1, roi_y1 - 10), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 165, 0), 2)
+            
+            # Draw manual ROI if enabled and auto ROI is disabled
+            elif self.use_roi.get() and not self.use_auto_roi.get():
+                h, w = annotated_frame.shape[:2]
+                roi_x1, roi_y1 = int(w*0.1), int(h*0.3)
+                roi_x2, roi_y2 = int(w*0.9), int(h*0.9)
+                cv2.rectangle(annotated_frame, (roi_x1, roi_y1), (roi_x2, roi_y2), (0, 255, 255), 2)
+                cv2.putText(annotated_frame, "PERIMETER ZONE", (roi_x1, roi_y1 - 10), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
             
             if self.use_gaze.get():
                 annotated_frame = self.draw_gaze_overlay(annotated_frame)
@@ -223,6 +389,18 @@ class SecuritySystem:
         state = "ENABLED" if self.use_low_light.get() else "DISABLED"
         self.log_message(f"SYSTEM: Low light enhancement {state}")
 
+    def toggle_distortion_correction(self):
+        state = "ENABLED" if self.use_distortion_correction.get() else "DISABLED"
+        self.log_message(f"SYSTEM: Lens distortion correction {state}")
+
+    def toggle_auto_roi(self):
+        if self.use_auto_roi.get():
+            self.roi_coords = None
+            self.roi_learning_frames = 0
+            self.log_message("AUTO-ROI: Learning mode activated")
+        else:
+            self.log_message("AUTO-ROI: Manual mode restored")
+
     def draw_gaze_overlay(self, frame):
         h, w = frame.shape[:2]
         l, r = self.gaze.pupil_left_coords(), self.gaze.pupil_right_coords()
@@ -249,5 +427,5 @@ class SecuritySystem:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = SecuritySystem(root, "SENTINEL AI v2.0")
+    app = SecuritySystem(root, "SATORU GOJO SIX EYES SYSTEM ")
     root.mainloop()
